@@ -51,6 +51,7 @@ if ($trouve) {
 # Archive pour GitHub Releases, nommee avec la version (lue dans CMakeLists.txt)
 $cmake = Get-Content (Join-Path $racine "CMakeLists.txt") -Raw
 if ($cmake -match 'project\(ndsemu VERSION ([0-9.]+)') { $version = $Matches[1] } else { $version = "0.0.0" }
+if ($cmake -match 'set\(NDSEMU_GITHUB_REPO "([^"]+)"') { $depot = $Matches[1] } else { $depot = "CosyTunicc/ndsemu" }
 $zipVersion = Join-Path $racine "ndsemu-windows-$version.zip"
 Copy-Item $zip $zipVersion -Force
 Write-Host "Archive de la version ${version} : $zipVersion"
@@ -66,12 +67,12 @@ if ($Publier) {
         Write-Host "Ecris d'abord les nouveautes de la version $version dans NOUVEAUTES.md (elles s'affichent dans ndsemu)."
         exit 1
     }
-    gh release view "v$version" *> $null
+    gh release view "v$version" --repo $depot *> $null
     if ($LASTEXITCODE -eq 0) {
         Write-Host "La version v$version existe deja sur GitHub : augmente la version dans CMakeLists.txt et recompile."
         exit 1
     }
-    gh release create "v$version" "$zipVersion" --title "ndsemu $version" --notes-file "$notes"
+    gh release create "v$version" "$zipVersion" --repo $depot --target main --title "ndsemu $version" --notes-file "$notes"
     if ($LASTEXITCODE -ne 0) { Write-Host "La publication a echoue."; exit 1 }
-    Write-Host "Version $version publiee : les ndsemu installes la proposeront au prochain demarrage."
+    Write-Host "Version $version publiee sur https://github.com/$depot/releases : les ndsemu installes la proposeront au prochain demarrage."
 }
