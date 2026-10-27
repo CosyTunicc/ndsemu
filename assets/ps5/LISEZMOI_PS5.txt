@@ -1,0 +1,44 @@
+NDSEMU POUR PS5 (version de test)
+==================================
+
+Émulateur Nintendo DS pour PS5 avec jailbreak, lancé depuis le Homebrew
+Launcher de websrv.
+
+INSTALLATION
+------------
+1. Copiez le dossier « ndsemu » (celui qui contient eboot.elf) dans le dossier
+   « homebrew » :
+     - sur une clé USB :      /homebrew/ndsemu
+     - ou sur le disque interne (par FTP) : /data/homebrew/ndsemu
+2. Mettez vos jeux .nds dans l'un de ces dossiers :
+     - clé USB : un dossier « ndsemu » à la racine  ->  /ndsemu/Mario Kart DS.nds
+     - à côté du programme : homebrew/ndsemu/roms/
+     - disque interne : /data/ndsemu/roms/
+3. Sur la PS5 : lancez websrv (Payload Manager), puis ouvrez le Homebrew
+   Launcher et choisissez ndsemu.
+
+MANETTE
+-------
+  Rond              A
+  Croix             B
+  Triangle          X
+  Carré             Y
+  L1 / R1           L / R
+  Options           Start
+  L2                Select
+  Croix directionnelle ou stick gauche : croix de la DS
+  Stick droit       déplace le stylet sur l'écran du bas
+  R2 (ou R3)        pose le stylet (toucher l'écran)
+  Clic du pavé tactile : menu (pause, sauvegardes d'état, disposition des
+                    écrans, volume, réinitialiser, retour à la liste)
+
+Dans la liste des jeux : croix directionnelle pour choisir, Croix pour jouer.
+
+SAUVEGARDES
+-----------
+- La sauvegarde du jeu (.sav) est écrite à côté du fichier .nds.
+- Le firmware, les réglages et les sauvegardes d'état (4 emplacements, dans le
+  menu) sont dans /data/ndsemu.
+
+Si le jeu s'arrête sur une erreur, un message l'indique et ndsemu revient à la
+liste des jeux.

@@ -1,0 +1,109 @@
+﻿NDSEMU - émulateur Nintendo DS (version de test)
+=================================================
+
+ndsemu est un émulateur Nintendo DS en cours de développement, avec une
+bibliothèque de jeux et une fenêtre de jeu à menus.
+
+Jeux testés :
+  - New Super Mario Bros. (version européenne) : jouable
+  - Mario Kart DS (version européenne) : jouable (menus, courses, sauvegarde)
+Les autres jeux n'ont pas été essayés : ils peuvent marcher, mal marcher ou ne
+pas démarrer. Dans ce cas, voir « SI ÇA PLANTE » plus bas.
+
+CE QU'IL FAUT
+-------------
+- Windows 10 ou 11, 64 bits. Rien à installer.
+- Votre propre copie du jeu au format .nds. Le jeu n'est pas fourni et ne doit
+  pas être partagé : utilisez une copie de votre propre cartouche.
+
+PREMIER LANCEMENT
+-----------------
+Mettez ndsemu.exe dans un dossier à lui (par exemple Documents\ndsemu) : il y
+range ses réglages et ses sauvegardes d'état.
+
+Si Windows affiche « Windows a protégé votre ordinateur » : cliquez sur
+« Informations complémentaires », puis « Exécuter quand même » (le programme
+n'est pas signé). Un antivirus peut aussi le signaler à tort.
+
+LA BIBLIOTHÈQUE
+---------------
+Double-cliquez sur ndsemu.exe : la bibliothèque de jeux s'ouvre.
+  - « Ajouter un dossier » : choisissez le dossier où sont vos fichiers .nds.
+    Il est surveillé : un jeu ajouté dedans apparaît tout seul.
+  - Vous pouvez aussi glisser des fichiers .nds sur la fenêtre.
+  - Double-clic sur un jeu (ou Entrée) : il s'ouvre dans une nouvelle fenêtre.
+  - Clic droit sur un jeu : lancer, arrêter, noter la compatibilité, ouvrir
+    son dossier.
+  - « Récemment joués » en haut : les derniers jeux, avec le temps de jeu.
+  - Recherche (Ctrl+F), vue liste ou grille, roue des réglages en haut à droite
+    (son, touches et manette).
+
+On peut aussi glisser un fichier .nds directement sur ndsemu.exe pour jouer
+sans passer par la bibliothèque.
+
+TOUCHES (par défaut)
+--------------------
+  Flèches          croix directionnelle
+  Z                bouton A
+  X                bouton B
+  S                bouton X
+  A                bouton Y
+  Q / W            gâchettes L / R
+  Entrée           Start
+  Retour arrière   Select
+  Clic gauche      stylet (sur l'écran du bas)
+
+Elles se changent dans « Touches et manette » (menu Jeu de la fenêtre de jeu,
+ou menu Help / roue des réglages de la bibliothèque).
+
+MANETTE
+-------
+Branchez-la (câble ou Bluetooth), elle est reconnue toute seule, même en cours
+de partie :
+  - manettes Xbox et compatibles,
+  - PS5 (DualSense) et PS4 (DualShock 4).
+Par défaut, la disposition suit celle de la DS : le bouton de droite (B sur
+Xbox, Rond sur PlayStation) fait A, celui du bas (A Xbox, Croix PS) fait B.
+Si une manette PlayStation n'est pas détectée, fermez DS4Windows, HidHide ou
+Steam, qui peuvent la cacher aux autres programmes.
+
+FENÊTRE DE JEU
+--------------
+La barre de menus en haut (Jeu, Affichage, Son) donne accès à tout. Raccourcis :
+  P                  pause
+  Ctrl+R             réinitialiser (comme éteindre et rallumer la console)
+  M                  couper / remettre le son
+  Ctrl+1 à Ctrl+4    taille de la fenêtre ×1 à ×4
+  F11 ou Alt+Entrée  plein écran (Échap pour sortir)
+  Maj+F1 à Maj+F4    sauvegarder l'état dans l'emplacement 1 à 4
+  F1 à F4            charger l'état 1 à 4
+  F12                instantané de diagnostic (fichiers etat_XXX)
+Le menu Affichage permet aussi de mettre les deux écrans côte à côte et de
+lisser l'image.
+
+SAUVEGARDES
+-----------
+- La sauvegarde du jeu (celle que le jeu fait lui-même) est un fichier .sav
+  placé à côté du fichier du jeu, avec le même nom. Gardez-le pour reprendre
+  votre partie.
+- Les sauvegardes d'état (Maj+F1 à F4) enregistrent le moment exact où vous
+  êtes. Elles sont dans le dossier « etats » à côté de ndsemu.exe, environ
+  6 Mo chacune. Elles ne servent qu'à cette version de ndsemu : après une mise
+  à jour, elles peuvent ne plus se charger (votre .sav, lui, reste valable).
+
+CE QUI MANQUE ENCORE
+--------------------
+- Le micro, le Wi-Fi, les jeux DSi.
+- Quelques effets 3D rares (mode fil de fer...).
+- Beaucoup de jeux n'ont jamais été essayés.
+
+SI ÇA PLANTE OU SI QUELQUE CHOSE EST CASSÉ
+------------------------------------------
+Si le jeu s'arrête sur une erreur, la bibliothèque l'indique et un fichier
+ndsemu_erreur.txt est écrit à côté de ndsemu.exe : envoyez-le à la personne
+qui vous a donné l'émulateur, avec une phrase sur ce que vous faisiez.
+Pour un problème d'affichage : appuyez sur F12 au moment du problème, et
+envoyez les fichiers etat_XXX.txt, etat_XXX.png et etat_XXX_3d.png qui
+apparaissent à côté de ndsemu.exe, avec une capture d'écran.
+
+Interface réalisée avec Dear ImGui (licence MIT, voir LICENCES.txt).

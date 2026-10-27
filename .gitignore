@@ -1,0 +1,33 @@
+# Jeux, BIOS et firmware : jamais dans le depot
+*.nds
+*.bin
+bios*
+firmware*
+# Sauvegardes, etats et reglages personnels
+*.sav
+*.etat*
+etats/
+*.ini
+# Compilation
+build/
+build_*/
+out/
+.vs/
+*.exe
+*.old
+# Fichiers produits par ndsemu (diagnostic, captures)
+diag*.txt
+etat_*.txt
+etat_*.png
+ndsemu_erreur.txt
+son.wav
+son_journal.txt
+images/
+ecran.png
+perf.txt
+poly_dump.txt
+sortie.txt
+trace_*.txt
+# Archives de partage et de publication
+ndsemu_a_partager/
+*.zip
