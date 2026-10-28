@@ -256,6 +256,7 @@ struct EmuThread {
         auto next = clock::now();
         std::vector<int16_t> audioBuf(4096 * 2);
         int saveTimer = 0;
+        uint64_t gxLast = 0;
         while (!quit) {
             if (!running || failed) { std::this_thread::sleep_for(std::chrono::milliseconds(4)); next = clock::now(); continue; }
             auto now = clock::now();
@@ -272,9 +273,11 @@ struct EmuThread {
             const uint32_t in = input.load();
             emu->setInput(uint16_t(in & 0xFFFF), uint8_t((in >> 16) & 0xFF), (in >> 24) & 1, touchX.load(), touchY.load());
             const auto t0 = clock::now();
-            const uint64_t gx0 = emu->sys().gx.renderNs;
             if (!emu->runFrame()) { failed = true; continue; }
-            gxNs += emu->sys().gx.renderNs - gx0;
+            // temps de dessin 3D : il se fait sur un autre coeur, souvent entre deux images, d'ou un releve continu
+            const uint64_t gxNow = emu->sys().gx.renderNs;
+            gxNs += gxNow >= gxLast ? gxNow - gxLast : gxNow;
+            gxLast = gxNow;
             const std::vector<uint32_t>& img = emu->render();
             emuNs += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(clock::now() - t0).count());
             emuFrames++;
