@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <chrono>
 
 namespace {
 
@@ -526,6 +527,11 @@ void Gx::onVBlank(const GxTexMem& mem) {
     if (!swapPending_) return;
     swapPending_ = false;
     texMem_ = mem;
+    struct Timer {                                                    // temps de dessin de l'image 3D (mesures)
+        uint64_t& acc;
+        std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        ~Timer() { acc += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count()); }
+    } timer{ renderNs };
 
     const uint32_t clearAlpha = (clearColor >> 16) & 31;
     // octet du haut = opacite 0..31 (0 : rien de dessine, le moteur 2D voit a travers)

@@ -45,11 +45,12 @@ FICHIERS=(
 )
 SDL_CFLAGS="$($PKG_CONFIG --cflags sdl2)"
 SDL_LIBS="$($PKG_CONFIG --libs sdl2 | sed 's/-lsamplerate//')"     # inutile ici (desactive dans SDL)
+# -march=znver2 : processeur de la PS5 (Zen 2, AVX2)
 OBJETS=()
 for f in "${FICHIERS[@]}"; do
     o="$SORTIE/obj/$(basename "${f%.cpp}").o"
     echo "  $(basename "$f")"
-    "$CXX" -std=c++17 -O2 -Wall -I"$SRC" -I"$IM" $SDL_CFLAGS -c "$f" -o "$o" &
+    "$CXX" -std=c++17 -O3 -march=znver2 -Wall -I"$SRC" -I"$IM" $SDL_CFLAGS -c "$f" -o "$o" &
     OBJETS+=("$o")
     while (( $(jobs -r | wc -l) >= $(nproc) )); do wait -n; done
 done

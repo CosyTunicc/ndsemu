@@ -74,6 +74,7 @@ public:
     void printStats(FILE* f) const;                   // resume
     void dumpPolygons(FILE* f) const;                 // liste complete des polygones de la derniere image
     uint64_t unknownCommands = 0;
+    uint64_t renderNs = 0;                            // temps passe a dessiner les images 3D (cumul, en ns)
 
     // Tests de la geometrie (BOX_TEST, POS_TEST, VEC_TEST). Les commandes s'executent aussitot, donc le resultat
     // est toujours pret : le jeu le lit dans GXSTAT bit 1 (boite visible) et dans les registres de resultat.

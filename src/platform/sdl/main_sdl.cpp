@@ -14,9 +14,13 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <atomic>
+#include <chrono>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 #include "core/emulator.hpp"
 #include "core/sound.hpp"
@@ -226,6 +230,73 @@ struct Pad {
     }
 };
 
+// ---- emulation dans un fil d'execution a part -----------------------------------------------------------------
+// La console tourne a son rythme (59,83 images/s) sur un coeur du processeur, pendant que le fil principal
+// s'occupe de l'affichage (agrandissement, interface, attente de l'ecran) sur un autre : sur la PS5, faire les deux
+// a la suite ne tenait pas dans 16,7 ms. Le fil principal prend `lock` avant de toucher a l'emulateur.
+struct EmuThread {
+    std::mutex lock;                                   // l'emulateur (et emu lui-meme)
+    Emulator* emu = nullptr;
+    std::atomic<bool> running{ false }, quit{ false }, failed{ false };
+    std::atomic<uint32_t> input{ 0 };                  // touches (16 bits) | XY << 16 | stylet pose << 24
+    std::atomic<int> touchX{ 0 }, touchY{ 0 }, volume{ 100 };
+    SDL_AudioDeviceID audio = 0;
+    std::mutex frameLock;                              // derniere image terminee
+    std::vector<uint32_t> frame;
+    uint64_t frameSeq = 0;
+    std::atomic<uint64_t> emuNs{ 0 }, emuFrames{ 0 }, gxNs{ 0 };   // mesures (temps de calcul, images, dont 3D)
+    std::thread th;
+
+    void start() { th = std::thread([this] { loop(); }); }
+    void stop() { quit = true; if (th.joinable()) th.join(); }
+
+    void loop() {
+        using clock = std::chrono::steady_clock;
+        const auto period = std::chrono::nanoseconds(16715000);           // 1 / 59,8261 s
+        auto next = clock::now();
+        std::vector<int16_t> audioBuf(4096 * 2);
+        int saveTimer = 0;
+        while (!quit) {
+            if (!running || failed) { std::this_thread::sleep_for(std::chrono::milliseconds(4)); next = clock::now(); continue; }
+            auto now = clock::now();
+            if (now < next) {
+                const auto wait = next - now;
+                if (wait > std::chrono::milliseconds(2)) std::this_thread::sleep_for(wait - std::chrono::milliseconds(1));
+                else std::this_thread::yield();
+                continue;
+            }
+            if (now - next > std::chrono::milliseconds(100)) next = now;     // trop en retard : on ne rattrape pas
+            next += period;
+            std::lock_guard<std::mutex> g(lock);
+            if (!emu || !running) continue;
+            const uint32_t in = input.load();
+            emu->setInput(uint16_t(in & 0xFFFF), uint8_t((in >> 16) & 0xFF), (in >> 24) & 1, touchX.load(), touchY.load());
+            const auto t0 = clock::now();
+            const uint64_t gx0 = emu->sys().gx.renderNs;
+            if (!emu->runFrame()) { failed = true; continue; }
+            gxNs += emu->sys().gx.renderNs - gx0;
+            const std::vector<uint32_t>& img = emu->render();
+            emuNs += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(clock::now() - t0).count());
+            emuFrames++;
+            {
+                std::lock_guard<std::mutex> f(frameLock);
+                frame = img;
+                frameSeq++;
+            }
+            for (size_t n; (n = emu->takeAudio(audioBuf.data(), 4096)) > 0;) {
+                if (!audio) continue;
+                // trop d'avance (plus de ~150 ms en attente) : on laisse tomber ce morceau
+                if (SDL_GetQueuedAudioSize(audio) > Uint32(Spu::kSampleRate * 4 * 15 / 100)) continue;
+                const int vol = volume.load();
+                if (vol < 100)
+                    for (size_t i = 0; i < n * 2; i++) audioBuf[i] = int16_t(audioBuf[i] * vol / 100);
+                SDL_QueueAudio(audio, audioBuf.data(), Uint32(n * 4));
+            }
+            if (++saveTimer >= 60) { saveTimer = 0; emu->saveIfDirty(); }
+        }
+    }
+};
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -298,6 +369,11 @@ int main(int argc, char* argv[]) {
     journal(std::to_string(games.size()) + " jeu(x) trouv\xC3\xA9(s), " + std::to_string(SDL_NumJoysticks()) + " manette(s)");
 
     std::unique_ptr<Emulator> emu;
+    EmuThread worker;
+    worker.audio = audio;
+    worker.start();
+    std::vector<uint32_t> shownFrame;                            // derniere image recue du fil d'emulation
+    uint64_t shownSeq = 0;
     bool playing = false, menuOpen = false, quit = false;
     std::string toast, errorText, currentTitle;
     Uint64 toastUntil = 0;
@@ -305,18 +381,16 @@ int main(int argc, char* argv[]) {
     Uint64 cursorShownUntil = 0;
     Pad pad;
     bool prevTouchpad = false;
-    int saveTimer = 0;
     const Uint64 freq = SDL_GetPerformanceFrequency();
-    Uint64 last = SDL_GetPerformanceCounter(), emuLast = last;
-    double emuClock = 0;
-    double perfEmu = 0;                          // mesures (menu > Performances)
-    int perfEmuFrames = 0, perfShown = 0;
+    Uint64 last = SDL_GetPerformanceCounter();
+    int perfShown = 0;                           // mesures (menu > Performances)
+    double perfDraw = 0;
     std::string perfText;
-    Uint64 perfSince = SDL_GetPerformanceCounter();
-    std::vector<int16_t> audioBuf(4096 * 2);
+    Uint64 perfSince = SDL_GetPerformanceCounter(), perfLog = perfSince;
 
     auto notify = [&](const std::string& t) { toast = t; toastUntil = SDL_GetTicks64() + 2500; };
     auto startGame = [&](const std::string& path) {
+        std::lock_guard<std::mutex> g(worker.lock);
         emu = std::make_unique<Emulator>();
         std::string err;
         journal("lancement : " + path);
@@ -326,9 +400,15 @@ int main(int argc, char* argv[]) {
         GameEntry info;
         currentTitle = Library::readRomInfo(path, info) ? info.title : fs::path(path).filename().string();
         if (audio) SDL_ClearQueuedAudio(audio);
-        emuClock = 0;
+        worker.emu = emu.get();
+        worker.failed = false;
+        shownFrame.clear();
+        { std::lock_guard<std::mutex> f(worker.frameLock); worker.frame.clear(); }
     };
     auto stopGame = [&]() {
+        worker.running = false;
+        std::lock_guard<std::mutex> g(worker.lock);
+        worker.emu = nullptr;
         if (emu) emu->saveIfDirty();
         emu.reset();
         playing = false;
@@ -375,6 +455,7 @@ int main(int argc, char* argv[]) {
                     if (playing && !menuOpen && k >= SDLK_F1 && k <= SDLK_F4 && !e.key.repeat) {
                         const int slot = int(k - SDLK_F1) + 1;
                         std::string err;
+                        std::lock_guard<std::mutex> g(worker.lock);
                         if (shift) notify(emu->saveState(slot, err) ? "\xC3\x89tat " + std::to_string(slot) + " sauvegard\xC3\xA9" : "Erreur : " + err);
                         else notify(emu->loadState(slot, err) ? "\xC3\x89tat " + std::to_string(slot) + " charg\xC3\xA9" : "\xC3\x89tat " + std::to_string(slot) + " : " + err);
                     }
@@ -414,27 +495,19 @@ int main(int argc, char* argv[]) {
         if (playing && touchpad && !prevTouchpad) menuOpen = !menuOpen;
         prevTouchpad = touchpad;
 
-        // Temps ecoule -> nombre d'images de la console a calculer (au plus 2 d'un coup)
-        int framesDue = 0;
-        {
-            const Uint64 t = SDL_GetPerformanceCounter();
-            emuClock += double(t - emuLast) / double(freq);
-            emuLast = t;
-            if (emuClock > 0.1) emuClock = 0.1;
-            const double period = 1.0 / 59.8261;
-#ifndef __PROSPERO__
-            if (playing && !menuOpen && emuClock < period) {            // PC : on attend la prochaine image
-                SDL_Delay(Uint32((period - emuClock) * 1000.0));
-                continue;
-            }
-#endif
-            while (emuClock >= period && framesDue < 2) { emuClock -= period; framesDue++; }
-            if (emuClock >= period) emuClock = 0;                       // trop en retard : on ne rattrape pas
-            if (!playing || menuOpen) { framesDue = 0; emuClock = 0; }
+        // Emulation : le fil d'emulation tourne pendant la partie, sauf menu ouvert
+        if (worker.failed && emu) {
+            worker.running = false;
+            { std::lock_guard<std::mutex> g(worker.lock); errorText = "Le jeu s'est arr\xC3\xAAt\xC3\xA9 sur une erreur :\n" + emu->error(); }
+            journal(errorText);
+            stopGame();
         }
+        worker.volume = settings.volume;
+        worker.running = playing && !menuOpen && emu != nullptr;
         SDL_Surface* surf = SDL_GetWindowSurface(window);
         if (!surf) { SDL_Delay(16); continue; }
         SDL_LockSurface(surf);
+        const Uint64 drawStart = SDL_GetPerformanceCounter();
         SoftTarget target;
         target.pixels = static_cast<uint32_t*>(surf->pixels);
         target.width = surf->w;
@@ -482,38 +555,20 @@ int main(int argc, char* argv[]) {
                     curX = float((mx - rBot.x) * 256 / rBot.w);
                     curY = float((my - rBot.y) * 192 / rBot.h);
                 }
-                emu->setInput(keys, xy, touch, int(curX), int(curY));
-
-                // Autant d'images de la console que de temps reel ecoule (59,83 par seconde) : si l'affichage
-                // ralentit (30 images/s sur la PS5 si une image prend trop de temps), le jeu garde sa vitesse.
-                bool failed = false;
-                for (int k = 0; k < framesDue && !failed; k++) {
-                    const Uint64 qa = SDL_GetPerformanceCounter();
-                    if (!emu->runFrame()) { failed = true; break; }
-                    perfEmu += double(SDL_GetPerformanceCounter() - qa) * 1000.0 / double(freq);
-                    perfEmuFrames++;
-                    for (size_t n; (n = emu->takeAudio(audioBuf.data(), 4096)) > 0;) {
-                        if (!audio) continue;
-                        // trop d'avance (plus de ~150 ms en attente) : on laisse tomber ce morceau
-                        if (SDL_GetQueuedAudioSize(audio) > Uint32(Spu::kSampleRate * 4 * 15 / 100)) continue;
-                        if (settings.volume < 100)
-                            for (size_t i = 0; i < n * 2; i++) audioBuf[i] = int16_t(audioBuf[i] * settings.volume / 100);
-                        SDL_QueueAudio(audio, audioBuf.data(), Uint32(n * 4));
-                    }
-                    if (++saveTimer >= 60) { saveTimer = 0; emu->saveIfDirty(); }
-                }
-                if (failed) {
-                    errorText = "Le jeu s'est arr\xC3\xAAt\xC3\xA9 sur une erreur :\n" + emu->error();
-                    journal(errorText);
-                    stopGame();
-                } else if (framesDue > 0) {
-                    emu->render();
-                }
+                worker.touchX = int(curX);
+                worker.touchY = int(curY);
+                worker.input = uint32_t(keys) | (uint32_t(xy) << 16) | (touch ? 1u << 24 : 0u);
             }
-            if (emu) {
-                blitScreen(emu->lastFrame(), 0, rTop, target);
-                blitScreen(emu->lastFrame(), 1, rBot, target);
+            {
+                std::lock_guard<std::mutex> f(worker.frameLock);
+                if (worker.frameSeq != shownSeq && !worker.frame.empty()) { shownFrame = worker.frame; shownSeq = worker.frameSeq; }
             }
+            if (shownFrame.empty()) {                                  // premiere image pas encore prete
+                std::lock_guard<std::mutex> g(worker.lock);
+                if (emu) shownFrame = emu->render();
+            }
+            blitScreen(shownFrame, 0, rTop, target);
+            blitScreen(shownFrame, 1, rBot, target);
         }
 
         // ---- interface ----
@@ -588,6 +643,7 @@ int main(int argc, char* argv[]) {
                 const std::string ls = "Sauvegarder l'\xC3\xA9tat " + std::to_string(slot);
                 if (ImGui::Button(ls.c_str(), ImVec2(240 * ui, 0))) {
                     std::string err;
+                    std::lock_guard<std::mutex> g(worker.lock);
                     notify(emu->saveState(slot, err) ? "\xC3\x89tat " + std::to_string(slot) + " sauvegard\xC3\xA9" : "Erreur : " + err);
                     menuOpen = false;
                 }
@@ -597,6 +653,8 @@ int main(int argc, char* argv[]) {
                 ImGui::BeginDisabled(!exists);
                 if (ImGui::Button(ll.c_str(), ImVec2(-FLT_MIN, 0))) {
                     std::string err;
+                    std::lock_guard<std::mutex> g(worker.lock);
+                    shownFrame.clear();
                     notify(emu->loadState(slot, err) ? "\xC3\x89tat " + std::to_string(slot) + " charg\xC3\xA9" : "\xC3\x89tat " + std::to_string(slot) + " : " + err);
                     menuOpen = false;
                 }
@@ -609,7 +667,7 @@ int main(int argc, char* argv[]) {
             const std::string vol = "Volume : " + std::to_string(settings.volume) + " %";
             if (ImGui::Button(vol.c_str(), bw)) { settings.volume = settings.volume >= 100 ? 0 : settings.volume + 25; saveSettings(settings); }
             if (ImGui::Button(settings.perf ? "Performances : affich\xC3\xA9" "es" : "Performances : masqu\xC3\xA9" "es", bw)) { settings.perf = !settings.perf; saveSettings(settings); }
-            if (ImGui::Button("R\xC3\xA9initialiser", bw)) { emu->reset(); menuOpen = false; notify("Console r\xC3\xA9initialis\xC3\xA9" "e"); }
+            if (ImGui::Button("R\xC3\xA9initialiser", bw)) { std::lock_guard<std::mutex> g(worker.lock); emu->reset(); shownFrame.clear(); menuOpen = false; notify("Console r\xC3\xA9initialis\xC3\xA9" "e"); }
             if (ImGui::Button("Retour \xC3\xA0 la liste des jeux", bw)) stopGame();
             ImGui::Spacing();
             ImGui::TextDisabled("Pav\xC3\xA9 tactile : reprendre");
@@ -627,11 +685,18 @@ int main(int argc, char* argv[]) {
         // Performances : images affichees par seconde, temps de calcul d'une image de la console
         perfShown++;
         if (double(SDL_GetPerformanceCounter() - perfSince) >= double(freq)) {
-            char buf[96];
-            std::snprintf(buf, sizeof buf, "%d images/s  \xC2\xB7  \xC3\xA9mulation %.1f ms/image", perfShown,
-                          perfEmuFrames ? perfEmu / perfEmuFrames : 0.0);
+            const double secs = double(SDL_GetPerformanceCounter() - perfSince) / double(freq);
+            const uint64_t ef = worker.emuFrames.exchange(0), ens = worker.emuNs.exchange(0), gns = worker.gxNs.exchange(0);
+            char buf[200];
+            std::snprintf(buf, sizeof buf, "jeu %.0f images/s (%.0f %%)  \xC2\xB7  \xC3\xA9mulation %.1f ms/image dont 3D %.1f ms  \xC2\xB7  affichage %d images/s, %.1f ms",
+                          double(ef) / secs, double(ef) / secs / 59.8261 * 100.0, ef ? double(ens) / double(ef) / 1e6 : 0.0,
+                          ef ? double(gns) / double(ef) / 1e6 : 0.0, int(perfShown / secs + 0.5), perfShown ? perfDraw / perfShown : 0.0);
             perfText = buf;
-            perfShown = 0; perfEmu = 0; perfEmuFrames = 0;
+            if (playing && !menuOpen && double(SDL_GetPerformanceCounter() - perfLog) >= 10.0 * double(freq)) {
+                journal("performances : " + perfText);
+                perfLog = SDL_GetPerformanceCounter();
+            }
+            perfShown = 0; perfDraw = 0;
             perfSince = SDL_GetPerformanceCounter();
         }
         if (playing && settings.perf) {
@@ -670,16 +735,19 @@ int main(int argc, char* argv[]) {
             writePng(capFile.c_str(), img, surf->w, surf->h);
             quit = true;
         }
+        perfDraw += double(SDL_GetPerformanceCounter() - drawStart) * 1000.0 / double(freq);
         SDL_UnlockSurface(surf);
         const bool shown = SDL_UpdateWindowSurface(window) == 0;   // PS5 : attend l'affichage (60 images/s)
         if (++shownFrames <= 3 && !shown) journal(std::string("erreur d'affichage : ") + SDL_GetError(), true);
         if (shownFrames == 1 && shown) journal("premi\xC3\xA8re image affich\xC3\xA9" "e", true);
 
 #ifndef __PROSPERO__
-        if (!playing || menuOpen) SDL_Delay(15);                   // PC : interface a ~60 images/s
+        SDL_Delay(playing && !menuOpen ? 8 : 15);                  // PC : pas d'attente de l'ecran ici
 #endif
     }
 
+    worker.running = false;
+    worker.stop();
     if (emu) emu->saveIfDirty();
     ImGui::DestroyContext();
     if (pad.gc) SDL_GameControllerClose(pad.gc);
