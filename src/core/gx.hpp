@@ -180,6 +180,8 @@ private:
     uint16_t r3dcnt_ = 0;
     uint32_t rClearColor_ = 0, rClearDepth_ = 0x7FFF, rViewport_ = 0xBFFF0000u;
     int rRejected_ = 0, rDropped_ = 0, rCulled_ = 0;
+    bool pendingWbuf_ = false, rWbuf_ = false;         // profondeur W (SWAP_BUFFERS bit 1)
+    static constexpr float kWScale = 1.0f / 16777215.0f;  // W (20.12, 24 bits) -> profondeur 0..1
     std::vector<uint8_t> texCopy_[4], palCopy_[6];
     std::vector<uint32_t> front_ = std::vector<uint32_t>(256 * 192, 0);   // image visible (mode differe)
     std::thread thread_;

@@ -328,6 +328,7 @@ void Gx::exec(uint32_t cmd, const uint32_t* p) {
         polyAttr_ = polyAttrNext_;
         break;
     case 0x50:                                                   // SWAP_BUFFERS
+        pendingWbuf_ = (p[0] & 2) != 0;                          // bit 1 : profondeur W au lieu de Z
         pending_ = std::move(building_);
         building_.clear();
         pendingRejected_ = rejectedOffscreen_; pendingDropped_ = droppedPolys_; pendingCulled_ = culledPolys_;
@@ -399,8 +400,9 @@ void Gx::printStats(FILE* f) const {
     std::fprintf(f, "rejetes hors champ=%d perdus (liste pleine)=%d faces ecartees=%d | faces demandees (aucune, dos, face, les deux) = %d %d %d %d | pixels visibles : sens inverse=%d sens horaire=%d\n",
         stats.offscreen, stats.dropped, stats.culled, stats.renderFlags[0], stats.renderFlags[1], stats.renderFlags[2], stats.renderFlags[3],
         stats.winNeg, stats.winPos);
-    std::fprintf(f, "VIEWPORT=%08X (x1=%u y1=%u x2=%u y2=%u) CLEAR_COLOR=%08X CLEAR_DEPTH=%04X\n", viewport_,
-        viewport_ & 0xFF, (viewport_ >> 8) & 0xFF, (viewport_ >> 16) & 0xFF, (viewport_ >> 24) & 0xFF, clearColor, clearDepth);
+    std::fprintf(f, "VIEWPORT=%08X (x1=%u y1=%u x2=%u y2=%u) CLEAR_COLOR=%08X CLEAR_DEPTH=%04X profondeur=%s\n", viewport_,
+        viewport_ & 0xFF, (viewport_ >> 8) & 0xFF, (viewport_ >> 16) & 0xFF, (viewport_ >> 24) & 0xFF, clearColor, clearDepth,
+        rWbuf_ ? "W" : "Z");
 }
 
 void Gx::dumpPolygons(FILE* f) const {
@@ -540,6 +542,7 @@ void Gx::onVBlank(const GxTexMem& mem) {
     rClearColor_ = clearColor;
     rClearDepth_ = clearDepth;
     rViewport_ = viewport_;
+    rWbuf_ = pendingWbuf_;
     rRejected_ = pendingRejected_; rDropped_ = pendingDropped_; rCulled_ = pendingCulled_;
     rList_.swap(pending_);
     pending_.clear();
@@ -1014,7 +1017,8 @@ void Gx::rasterize(const GxPoly& poly) {
 
             for (int x = xs; x <= xe; x++, idx++, z += pz.gx, dn += pd.gx, nr += pr.gx, ng += pg.gx, nb += pb.gx, ns += ps.gx, nt += pt.gx) {
                 if (shadowKind == 1) {                                        // masque : marque la ou le test echoue
-                    if (z > depth_[idx]) stencil_[idx] = 1;
+                    const float mz = rWbuf_ ? kWScale / (dn > 1e-12f ? dn : 1e-12f) : z;
+                    if (mz > depth_[idx]) stencil_[idx] = 1;
                     continue;
                 }
                 if (shadowKind == 2 && (!stencil_[idx] || polyId_[idx] == polyIdNum)) continue;
@@ -1051,6 +1055,8 @@ void Gx::rasterize(const GxPoly& poly) {
                         if (textured) { sns = at(ps); snt = at(pt); }
                     }
                 }
+                // W-buffer (SWAP_BUFFERS bit 1) : la profondeur est W (24 bits) au lieu de Z / W
+                if (rWbuf_) sz = kWScale / (sdn > 1e-12f ? sdn : 1e-12f);
                 if (sz > depth_[idx]) {
                     continue;
                 }
