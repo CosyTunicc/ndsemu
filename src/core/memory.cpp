@@ -263,6 +263,7 @@ void System::dmaRun(int cpu, int ch) {
 void System::dmaTrigger(int timing) {
     for (int c = 0; c < 2; c++)
         for (int ch = 0; ch < 4; ch++) {
+            if (c == 1 && timing == 2) continue;               // pour l'ARM7, la valeur 2 veut dire "cartouche"
             DmaChan& d = dma[c][ch];
             if ((d.cnt & 0x80000000u) && dmaTiming(c, d.cnt) == timing) dmaRun(c, ch);
         }
@@ -280,8 +281,10 @@ void System::dmaWrite(int cpu, int ch, int reg, uint32_t value, uint32_t mask) {
         d.curSad = d.sad;
         d.curDad = d.dad;
         int t = dmaTiming(cpu, d.cnt);
-        bool now = (t == 0) || (cpu == 0 && (t == 5 || t == 7)) || (cpu == 1 && t == 2);   // immediat, cartouche, ou file 3D (toujours prete)
+        const bool card = (cpu == 0 && t == 5) || (cpu == 1 && t == 2);
+        bool now = (t == 0) || (cpu == 0 && t == 7);           // immediat, ou file 3D (toujours prete)
         if (now) dmaRun(cpu, ch);
+        else if (card && cardBusy) cardDmaKick();              // cartouche : seulement si des donnees attendent
     }
 }
 
@@ -626,6 +629,25 @@ void System::cardStart() {
     cardPos = 0;
     cardBusy = len > 0;
     if (!cardBusy && (auxSpiCnt & 0x4000)) raise((exmemcnt & 0x0800) ? 1 : 0, IRQ_CARD);
+    if (cardBusy) cardDmaKick();
+}
+
+// DMA "cartouche" : le jeu programme souvent le DMA AVANT de lancer la lecture (1 mot a chaque donnee prete,
+// en mode repetition). Les donnees sont la tout de suite ici : on vide le transfert d'un coup par ce DMA.
+void System::cardDmaKick() {
+    const int cpu = (exmemcnt & 0x0800) ? 1 : 0;              // processeur qui a la main sur la cartouche
+    for (int guard = 0; cardBusy && guard < 0x10000; guard++) {
+        int found = -1;
+        for (int ch = 0; ch < 4 && found < 0; ch++) {
+            const DmaChan& d = dma[cpu][ch];
+            const int t = dmaTiming(cpu, d.cnt);
+            if ((d.cnt & 0x80000000u) && ((cpu == 0 && t == 5) || (cpu == 1 && t == 2))) found = ch;
+        }
+        if (found < 0) return;                                 // pas de DMA : le jeu lira lui-meme
+        const size_t before = cardPos;
+        dmaRun(cpu, found);
+        if (cardPos == before) return;                         // le DMA ne lit pas la cartouche : on s'arrete
+    }
 }
 
 uint32_t System::cardRomCtrlRead() const {

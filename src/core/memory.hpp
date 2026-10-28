@@ -205,6 +205,7 @@ private:
     uint8_t rtcStatus1 = 0x02, rtcStatus2 = 0x00;      // statut 1 : bit 1 = mode 24 heures
     uint8_t rtcAlarm[2][3] = {}, rtcAdjust = 0, rtcFree = 0;
     void cardStart();
+    void cardDmaKick();                        // DMA "cartouche" en attente : vide le transfert en cours
     uint32_t cardRomCtrlRead() const;
     uint32_t cardReadWord();
     uint32_t fifoCntRead(int cpu) const;
