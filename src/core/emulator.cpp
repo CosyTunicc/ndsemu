@@ -62,7 +62,10 @@ bool Emulator::boot() {
         return false;
     }
     std::vector<uint8_t> fw;
-    if (loadFile(firmwarePath_, fw) && fw.size() == sys_.firmware.size()) sys_.firmware = fw;
+    if (loadFile(firmwarePath_, fw) && fw.size() == sys_.firmware.size()) {
+        System::firmwareWifiDefaults(fw);                  // ancien firmware.bin sans reglages Wi-Fi
+        sys_.firmware = fw;
+    }
     ndsSetupBootMemory(bus9_, rom_, sys_.cardChipId, sys_.firmware);
     bus9_.write8(0x04000242, 0x82);                        // VRAM C et D a l'ARM7, comme au lancement d'un jeu
     bus9_.write8(0x04000243, 0x8A);

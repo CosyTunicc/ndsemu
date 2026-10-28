@@ -27,6 +27,7 @@ add_library(core
   src/core/sound.cpp
   src/core/savestate.cpp
   src/core/emulator.cpp
+  src/core/wifi.cpp
 )
 target_include_directories(core PUBLIC src)
 target_compile_options(core PRIVATE ${WARN})

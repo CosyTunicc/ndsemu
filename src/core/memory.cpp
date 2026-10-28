@@ -382,6 +382,61 @@ uint8_t System::backupTransfer(uint8_t b, bool hold) {
 // Firmware fabrique : on ne fournit que ce que les jeux lisent vraiment, c'est-a-dire l'en-tete (position
 // des reglages utilisateur) et les reglages eux-memes, en deux copies (le systeme garde celle dont le
 // compteur est le plus grand). Le reste vaut 0xFF, comme une memoire flash effacee.
+// Reglages Wi-Fi de l'en-tete du firmware (0x2A..0x163) : ceux d'une DS Lite (valeurs d'etalonnage relevees sur
+// un vrai firmware, telles que les documente melonDS). La bibliotheque sans-fil des jeux les verifie (CRC, type de
+// puce radio) avant d'allumer le Wi-Fi. Ne fait rien si le firmware en contient deja de valides.
+void System::firmwareWifiDefaults(std::vector<uint8_t>& fw) {
+    if (fw.size() < 0x200) return;
+    auto crc16 = [](const uint8_t* d, size_t n) {
+        uint16_t c = 0;
+        for (size_t i = 0; i < n; i++) {
+            c ^= d[i];
+            for (int k = 0; k < 8; k++) c = (c & 1) ? uint16_t((c >> 1) ^ 0xA001) : uint16_t(c >> 1);
+        }
+        return c;
+    };
+    const uint16_t len = uint16_t(fw[0x2C] | (fw[0x2D] << 8));
+    if (len == 0x138 && (fw[0x40] == 2 || fw[0x40] == 3) && crc16(&fw[0x2C], len) == uint16_t(fw[0x2A] | (fw[0x2B] << 8))) return;
+    static const uint8_t kBb[0x69] = {
+        0x03, 0x17, 0x40, 0x00, 0x1B, 0x6C, 0x48, 0x80, 0x38, 0x00, 0x35, 0x07, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0xB0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC7, 0xBB, 0x01, 0x24, 0x7F,
+        0x5A, 0x01, 0x3F, 0x01, 0x3F, 0x36, 0x1D, 0x00, 0x78, 0x35, 0x55, 0x12, 0x34, 0x1C, 0x00, 0x01,
+        0x0E, 0x38, 0x03, 0x70, 0xC5, 0x2A, 0x0A, 0x08, 0x04, 0x01, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFE,
+        0xFE, 0xFE, 0xFE, 0xFC, 0xFC, 0xFA, 0xFA, 0xFA, 0xFA, 0xFA, 0xF8, 0xF8, 0xF6, 0x00, 0x12, 0x14,
+        0x12, 0x41, 0x23, 0x03, 0x04, 0x70, 0x35, 0x0E, 0x2C, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x12, 0x28, 0x1C };
+    static const uint8_t kRf[0x29] = {
+        0x31, 0x4C, 0x4F, 0x21, 0x00, 0x10, 0xB0, 0x08, 0xFA, 0x15, 0x26, 0xE6, 0xC1, 0x01, 0x0E, 0x50,
+        0x05, 0x00, 0x6D, 0x12, 0x00, 0x00, 0x01, 0xFF, 0x0E, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x06,
+        0x06, 0x00, 0x00, 0x00, 0x18, 0x00, 0x02, 0x00, 0x00 };
+    static const uint8_t kChan[0x3C] = {
+        0x1E, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x0E, 0x0E, 0x0E, 0x0E, 0x0E, 0x0E, 0x0E, 0x16,
+        0x26, 0x1C, 0x1C, 0x1C, 0x1D, 0x1D, 0x1D, 0x1E, 0x1E, 0x1E, 0x1E, 0x1F, 0x1E, 0x1F, 0x18,
+        0x01, 0x4B, 0x4B, 0x4B, 0x4B, 0x4C, 0x4C, 0x4C, 0x4C, 0x4C, 0x4C, 0x4C, 0x4D, 0x4D, 0x4D,
+        0x02, 0x6C, 0x71, 0x76, 0x5B, 0x40, 0x45, 0x4A, 0x2F, 0x34, 0x39, 0x3E, 0x03, 0x08, 0x14 };
+    static const uint16_t kInit[16] = { 0x0002, 0x0017, 0x0026, 0x1818, 0x0048, 0x4840, 0x0058, 0x0042,
+                                        0x0146, 0x8064, 0xE6E6, 0x2443, 0x000E, 0x0001, 0x0001, 0x0402 };
+    std::memset(&fw[0x2A], 0, 0x200 - 0x2A);
+    fw[0x1D] = 0x20;                                           // DS Lite (puce radio de type 3)
+    fw[0x2C] = 0x38; fw[0x2D] = 0x01;                          // longueur des reglages : 0x138
+    fw[0x2F] = 6;                                              // version des reglages Wi-Fi
+    const uint8_t unused3[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00 };
+    std::memcpy(&fw[0x30], unused3, 6);
+    const uint8_t mac[6] = { 0x00, 0x09, 0xBF, 0x4E, 0x44, 0x53 };
+    std::memcpy(&fw[0x36], mac, 6);                            // adresse MAC
+    fw[0x3C] = 0xFE; fw[0x3D] = 0x3F;                          // canaux 1 a 13
+    fw[0x3E] = 0xFF; fw[0x3F] = 0xFF;
+    fw[0x40] = 3; fw[0x41] = 0x94; fw[0x42] = 0x29; fw[0x43] = 0x02;
+    for (int i = 0; i < 16; i++) { fw[0x44 + 2 * i] = uint8_t(kInit[i]); fw[0x45 + 2 * i] = uint8_t(kInit[i] >> 8); }
+    std::memcpy(&fw[0x64], kBb, sizeof kBb);
+    std::memcpy(&fw[0xCE], kRf, sizeof kRf);
+    fw[0xF7] = 0x02;
+    std::memcpy(&fw[0xF8], kChan, sizeof kChan);
+    std::memset(&fw[0x134], 0xFF, 46);
+    const uint16_t c = crc16(&fw[0x2C], 0x138);
+    fw[0x2A] = uint8_t(c); fw[0x2B] = uint8_t(c >> 8);
+}
+
 void System::buildFirmware() {
     firmware.assign(0x40000, 0xFF);
     std::memset(firmware.data(), 0, 0x200);
@@ -413,6 +468,7 @@ void System::buildFirmware() {
         }
         put16(0x72, crc);
     }
+    firmwareWifiDefaults(firmware);
 }
 
 void System::spiRelease() {
@@ -756,6 +812,7 @@ void System::newLine() {
     lineCycle = 0;
     inHblank = false;
     vcount = (vcount + 1) % 263;
+    wifiSync();
     if (vcount == 0) captureArmed = (eng[0][25] & 0x80000000u) != 0;
     if (vcount == 192) {
         gx.finish();                                           // mode differe : l'image 3D dessinee devient visible
@@ -869,6 +926,10 @@ void System::advanceSlow(uint32_t n) {
 }
 
 bool System::ioRead32(int cpu, uint32_t addr, uint32_t& v) {
+    if (cpu == 1 && addr >= 0x04800000 && addr < 0x04810000) {          // Wi-Fi
+        v = uint32_t(wifi.read(addr, cycles)) | (uint32_t(wifi.read(addr + 2, cycles)) << 16);
+        return true;
+    }
     if (cpu == 1 && addr >= 0x04000400 && addr < 0x04000520) { v = spu.read32(addr, cycles); return true; }   // son
     if (cpu == 0 && addr >= 0x04000620 && addr < 0x040006A4) {          // resultats des tests et matrices du moteur 3D
         if (addr < 0x04000630) {                                        // POS_RESULT : x, y, z, w
@@ -988,6 +1049,17 @@ bool System::ioRead32(int cpu, uint32_t addr, uint32_t& v) {
 }
 
 bool System::ioWrite32(int cpu, uint32_t addr, uint32_t v, uint32_t mask) {
+    if (cpu == 1 && addr >= 0x04800000 && addr < 0x04810000) {          // Wi-Fi (registres de 16 bits)
+        for (int h = 0; h < 2; h++) {
+            const uint32_t m = (mask >> (16 * h)) & 0xFFFF;
+            if (!m) continue;
+            uint16_t val = uint16_t(v >> (16 * h));
+            if (m != 0xFFFF) val = uint16_t((wifi.read(addr + 2 * h, cycles) & ~m) | (val & m));
+            wifi.write(addr + 2 * h, val, cycles);
+        }
+        wifiSync();
+        return true;
+    }
     if (cpu == 1 && addr >= 0x04000400 && addr < 0x04000520) { spu.write32(addr, v, mask, cycles); return true; }   // son
     if (cpu == 0 && addr >= 0x04000400 && addr < 0x04000600) {      // moteur 3D : file de commandes et ports directs
         if (mask == 0xFFFFFFFFu) {

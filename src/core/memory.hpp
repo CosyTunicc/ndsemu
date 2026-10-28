@@ -5,6 +5,7 @@
 #include <memory>
 #include <vector>
 #include "core/gx.hpp"
+#include "core/wifi.hpp"
 #include "core/sound.hpp"
 
 // Statistiques des acces a des adresses non gerees (par mot de 4 octets).
@@ -35,6 +36,7 @@ enum IrqBit : uint32_t {
     IRQ_IPCRECV = 1u << 18,        // file de reception IPC non vide
     IRQ_CARD = 1u << 19,           // transfert avec la cartouche termine
     IRQ_SPI = 1u << 23,            // transfert SPI termine (ARM7 seulement)
+    IRQ_WIFI = 1u << 24,           // puce Wi-Fi (ARM7 seulement)
     IRQ_GXFIFO = 1u << 21,         // file de commandes 3D (ARM9 seulement) : moitie vide ou vide selon GXSTAT
 };
 
@@ -61,6 +63,9 @@ struct System {
     // FIFO entre processeurs : fifo[c] est la file d'ENVOI du processeur c (reception de l'autre)
     IpcFifo fifo[2];
     Gx gx;                                     // moteur 3D (commandes, matrices, dessin des polygones)
+    Wifi wifi;                                 // puce Wi-Fi (ARM7), sans reseau
+    void wifiSync() { wifi.update(cycles); if (wifi.consumeIrqEdge()) raise(1, IRQ_WIFI); }
+    static void firmwareWifiDefaults(std::vector<uint8_t>& fw);   // reglages Wi-Fi d'une DS Lite (si absents)
     bool vblankReached = false;                // mis a vrai au debut de chaque V-Blank (fin d'image pour Emulator)
     uint8_t gxIrqMode = 0;                     // GXSTAT bits 30-31 : 0 = pas d'IRQ, 1 = file moins qu'a moitie pleine, 2 = file vide
     uint16_t fifoCnt[2] = {0, 0};              // bits 2, 10 et 15 reglables ; bit 14 = erreur

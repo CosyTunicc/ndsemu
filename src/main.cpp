@@ -302,6 +302,7 @@ int main(int argc, char** argv) {
         {
             std::vector<uint8_t> fw;
             if (loadFile(firmwarePath.string(), fw) && fw.size() == sys.firmware.size()) {
+                System::firmwareWifiDefaults(fw);          // ancien firmware.bin sans reglages Wi-Fi
                 sys.firmware = fw;
                 std::printf("Firmware charge : %s\n", firmwarePath.string().c_str());
             }
@@ -753,6 +754,10 @@ int main(int argc, char** argv) {
                     std::printf("  canal %2d : CNT=%08X SAD=%08X TMR=%04X PNT=%04X LEN=%06X\n", i, c.cnt, c.sad, c.tmr, c.pnt, c.len);
                 }
             }
+            std::printf("\n--- Wi-Fi : premiers acces (%d) ---\n", sys.wifi.logCount);
+            for (int i = 0; i < sys.wifi.logCount; i++)
+                std::printf("%s %08X %s %04X\n", sys.wifi.log[i].write ? "W" : "R", sys.wifi.log[i].addr,
+                            sys.wifi.log[i].write ? "<-" : "->", sys.wifi.log[i].value);
             std::printf("\n--- Etat du lecteur de cartouche ---\n");
             std::printf("ROMCTRL=%08X AUXSPICNT=%04X EXMEMCNT=%04X occupe=%d\n",
                 sys.romCtrl, sys.auxSpiCnt, sys.exmemcnt, sys.cardBusy ? 1 : 0);
