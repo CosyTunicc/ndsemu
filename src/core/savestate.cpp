@@ -16,6 +16,7 @@ template <class Ar> void Spu::serialize(Ar& a) {
 }
 
 template <class Ar> void Gx::serialize(Ar& a) {
+    finish();                                             // dessin en cours termine et visible
     a.io(clearColor); a.io(clearDepth); a.io(boxTestResult); a.io(posResult); a.io(vecResult);
     a.io(commandCount); a.io(swapCount);
     a.io(packed_); a.io(packedPos_); a.io(inParams_); a.io(cmd_); a.io(need_); a.io(have_); a.io(params_);
@@ -30,6 +31,7 @@ template <class Ar> void Gx::serialize(Ar& a) {
     a.io(rejectedOffscreen_); a.io(droppedPolys_); a.io(pendingRejected_); a.io(pendingDropped_);
     a.io(culledPolys_); a.io(pendingCulled_);
     a.io(color_);                                         // l'image 3D affichee
+    if (Ar::loading) front_ = color_;
     a.io(dispRegs);
     if (Ar::loading) texFast_.palKey = 0xFFFFFFFFu;       // palette deja convertie : a refaire
 }

@@ -1,7 +1,10 @@
 #pragma once
+#include <condition_variable>
 #include <cstdint>
-#include <vector>
 #include <cstdio>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 // Moteur 3D de la console (etape 1) : commandes de la file de geometrie, piles de matrices, transformation
 // des sommets, decoupage contre les plans proche et lointain, triangles a couleur par sommet avec tampon de
@@ -35,6 +38,9 @@ struct GxTexMem {
 class Gx {
 public:
     Gx();
+    ~Gx();
+    Gx(const Gx&) = delete;
+    Gx& operator=(const Gx&) = delete;
     template <class Ar> void serialize(Ar& a);   // sauvegarde d'etat (savestate.cpp)
 
     void writeFifo(uint32_t word);                    // GXFIFO : commandes empaquetees
@@ -52,7 +58,12 @@ public:
 
     // Image 3D prete a etre affichee : 256 x 192 pixels, octet du haut = opacite 0..31 (0 = transparent), puis 0xRRGGBB.
     // Le moteur 2D s'en sert pour melanger la 3D avec la couche situee dessous (voir BLDCNT dans video.cpp).
-    const uint32_t* frame() const { return color_.data(); }
+    const uint32_t* frame() const { return deferred ? front_.data() : color_.data(); }
+
+    // Dessin differe (comme la console : une image 3D est affichee pendant l'image suivante) et sur un autre coeur.
+    // A choisir avant le premier V-Blank. finish() : attend le dessin en cours et rend visible la derniere image.
+    bool deferred = false, async = false;
+    void finish();
 
     // Statistiques pour le diagnostic
     uint64_t commandCount = 0;
@@ -160,7 +171,21 @@ private:
     std::vector<uint32_t> below_;                      // anticrenelage : ce qu'il y avait sous le bord d'un polygone
     std::vector<uint8_t> cov_;                         // anticrenelage : part du pixel couverte par le polygone (0..31)
     void edgeAndFog();                                 // contours, brouillard puis anticrenelage, sur l'image terminee
-    uint16_t reg16(uint32_t off) const { return uint16_t(dispRegs[off] | (dispRegs[off + 1] << 8)); }
+    uint16_t reg16(uint32_t off) const { return uint16_t(rRegs_[off] | (rRegs_[off + 1] << 8)); }
+    void renderFrame();                                // dessine rList_ avec l'etat copie au V-Blank (r...)
+    void workerLoop();
+    // etat copie au V-Blank pour le dessin
+    std::vector<GxPoly> rList_;
+    uint8_t rRegs_[0x90] = {};
+    uint16_t r3dcnt_ = 0;
+    uint32_t rClearColor_ = 0, rClearDepth_ = 0x7FFF, rViewport_ = 0xBFFF0000u;
+    int rRejected_ = 0, rDropped_ = 0, rCulled_ = 0;
+    std::vector<uint8_t> texCopy_[4], palCopy_[6];
+    std::vector<uint32_t> front_ = std::vector<uint32_t>(256 * 192, 0);   // image visible (mode differe)
+    std::thread thread_;
+    std::mutex jobMutex_;
+    std::condition_variable jobCv_;
+    bool jobBusy_ = false, quit_ = false, publishPending_ = false;
     bool lastWasMask_ = false;                         // le polygone d'ombre precedent etait un masque
     std::vector<uint16_t> idBuf_;                      // polygone visible a chaque pixel (diagnostic)
     uint16_t curId_ = 0;

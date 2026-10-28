@@ -47,6 +47,7 @@ bool Emulator::load(const std::filesystem::path& rom, const std::filesystem::pat
 
 bool Emulator::boot() {
     sys_.cartRom = &rom_;
+    sys_.gx.deferred = sys_.gx.async = async3d_;
     sys_.dmaBus[0] = &bus9_;
     sys_.dmaBus[1] = &bus7_;
     std::vector<uint8_t> saved;
@@ -99,11 +100,14 @@ void Emulator::setInput(uint16_t keyInput, uint8_t keyXY, bool touchDown, int to
     }
 }
 
-// Une image : meme boucle que la fenetre Windows (2 instructions ARM9 pour 1 ARM7, temps par paquets)
+// Une image : meme boucle que la fenetre Windows (2 instructions ARM9 pour 1 ARM7, temps par paquets).
+// Avec la 3D sur un autre coeur, l'image s'arrete au debut du V-Blank : l'image visible est alors complete et le
+// dessin 3D lance a cet instant a toute l'image suivante pour se faire.
 bool Emulator::runFrame() {
     if (!loaded()) return false;
-    const uint64_t target = sys_.cycles + kCyclesPerFrame;
-    while (sys_.cycles < target) {
+    const uint64_t target = sys_.cycles + (async3d_ ? 2 * kCyclesPerFrame : kCyclesPerFrame);
+    sys_.vblankReached = false;
+    while (sys_.cycles < target && !(async3d_ && sys_.vblankReached)) {
         const uint64_t left = target - sys_.cycles;
         if (cpu9_.halted && cpu7_.halted && !sys_.haltRequest[0] && !sys_.haltRequest[1] &&
             !bus9_.wakePending() && !bus7_.wakePending()) {

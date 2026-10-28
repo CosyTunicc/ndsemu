@@ -37,6 +37,8 @@ public:
     const std::string& error() const { return error_; }
     const std::filesystem::path& romPath() const { return romPath_; }
     System& sys() { return sys_; }
+    // 3D dessinee sur un autre coeur (vrai par defaut) ; a regler avant load()
+    void setAsync3D(bool on) { async3d_ = on; }
 
 private:
     bool boot();
@@ -55,4 +57,5 @@ private:
     std::vector<uint8_t> lastSaved_;
     std::vector<uint32_t> frame_;
     std::string error_;
+    bool async3d_ = true;
 };

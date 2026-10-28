@@ -736,6 +736,8 @@ void System::newLine() {
     vcount = (vcount + 1) % 263;
     if (vcount == 0) captureArmed = (eng[0][25] & 0x80000000u) != 0;
     if (vcount == 192) {
+        gx.finish();                                           // mode differe : l'image 3D dessinee devient visible
+        vblankReached = true;
         for (int c = 0; c < 2; c++) if (dispstatCfg[c] & 0x08) raise(c, IRQ_VBLANK);
         if (captureArmed && (eng[0][25] & 0x80000000u)) {
             displayCapture(*this);

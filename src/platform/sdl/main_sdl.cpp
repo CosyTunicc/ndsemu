@@ -688,7 +688,7 @@ int main(int argc, char* argv[]) {
             const double secs = double(SDL_GetPerformanceCounter() - perfSince) / double(freq);
             const uint64_t ef = worker.emuFrames.exchange(0), ens = worker.emuNs.exchange(0), gns = worker.gxNs.exchange(0);
             char buf[200];
-            std::snprintf(buf, sizeof buf, "jeu %.0f images/s (%.0f %%)  \xC2\xB7  \xC3\xA9mulation %.1f ms/image dont 3D %.1f ms  \xC2\xB7  affichage %d images/s, %.1f ms",
+            std::snprintf(buf, sizeof buf, "jeu %.0f images/s (%.0f %%)  \xC2\xB7  \xC3\xA9mulation %.1f ms/image  \xC2\xB7  3D %.1f ms (autre c\xC5\x93ur)  \xC2\xB7  affichage %d images/s, %.1f ms",
                           double(ef) / secs, double(ef) / secs / 59.8261 * 100.0, ef ? double(ens) / double(ef) / 1e6 : 0.0,
                           ef ? double(gns) / double(ef) / 1e6 : 0.0, int(perfShown / secs + 0.5), perfShown ? perfDraw / perfShown : 0.0);
             perfText = buf;

@@ -61,6 +61,7 @@ struct System {
     // FIFO entre processeurs : fifo[c] est la file d'ENVOI du processeur c (reception de l'autre)
     IpcFifo fifo[2];
     Gx gx;                                     // moteur 3D (commandes, matrices, dessin des polygones)
+    bool vblankReached = false;                // mis a vrai au debut de chaque V-Blank (fin d'image pour Emulator)
     uint8_t gxIrqMode = 0;                     // GXSTAT bits 30-31 : 0 = pas d'IRQ, 1 = file moins qu'a moitie pleine, 2 = file vide
     uint16_t fifoCnt[2] = {0, 0};              // bits 2, 10 et 15 reglables ; bit 14 = erreur
     uint32_t fifoLast[2] = {0, 0};             // dernier mot lu (renvoye quand la file est vide)

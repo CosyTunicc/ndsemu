@@ -3,6 +3,9 @@
 #include <cstring>
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 
 namespace {
 
@@ -523,41 +526,110 @@ void Gx::emitPolygon(const GxVtx* v, int n) {
     building_.push_back(poly);
 }
 
+// Debut du V-Blank. La liste figee par SWAP_BUFFERS est dessinee avec l'etat de cet instant (registres, VRAM).
+// Mode immediat : le dessin est fait tout de suite et visible aussitot. Mode differe (deferred) : comme sur la
+// console, l'image dessinee n'est visible qu'au V-Blank suivant ; le dessin peut alors se faire sur un autre coeur
+// (async) pendant que l'emulation calcule l'image suivante. finish() attend la fin du dessin et le rend visible.
 void Gx::onVBlank(const GxTexMem& mem) {
+    finish();
     if (!swapPending_) return;
     swapPending_ = false;
-    texMem_ = mem;
+    // copie de l'etat utilise par le dessin : le jeu peut le modifier pendant que l'autre coeur dessine
+    std::memcpy(rRegs_, dispRegs, sizeof rRegs_);
+    r3dcnt_ = disp3dcnt;
+    rClearColor_ = clearColor;
+    rClearDepth_ = clearDepth;
+    rViewport_ = viewport_;
+    rRejected_ = pendingRejected_; rDropped_ = pendingDropped_; rCulled_ = pendingCulled_;
+    rList_.swap(pending_);
+    pending_.clear();
+    if (deferred) {                                                    // textures et palettes recopiees
+        for (int i = 0; i < 4; i++) {
+            if (mem.tex[i]) { texCopy_[i].assign(mem.tex[i], mem.tex[i] + 0x20000); texMem_.tex[i] = texCopy_[i].data(); }
+            else texMem_.tex[i] = nullptr;
+        }
+        for (int i = 0; i < 6; i++) {
+            if (mem.pal[i]) { palCopy_[i].assign(mem.pal[i], mem.pal[i] + 0x4000); texMem_.pal[i] = palCopy_[i].data(); }
+            else texMem_.pal[i] = nullptr;
+        }
+        texFast_.palKey = 0xFFFFFFFFu;                                 // les palettes ont pu changer de place
+    } else {
+        texMem_ = mem;
+    }
+    if (deferred && async) {
+        if (!thread_.joinable()) thread_ = std::thread([this] { workerLoop(); });
+        std::lock_guard<std::mutex> l(jobMutex_);
+        jobBusy_ = true;
+        jobCv_.notify_all();
+        return;
+    }
+    renderFrame();
+    if (deferred) publishPending_ = true;
+}
+
+void Gx::workerLoop() {
+    std::unique_lock<std::mutex> l(jobMutex_);
+    for (;;) {
+        jobCv_.wait(l, [this] { return jobBusy_ || quit_; });
+        if (quit_) return;
+        l.unlock();
+        renderFrame();
+        l.lock();
+        jobBusy_ = false;
+        publishPending_ = true;
+        jobCv_.notify_all();
+    }
+}
+
+void Gx::finish() {
+    if (!deferred) return;
+    std::unique_lock<std::mutex> l(jobMutex_);
+    jobCv_.wait(l, [this] { return !jobBusy_; });
+    if (publishPending_) {
+        publishPending_ = false;
+        front_ = color_;
+    }
+}
+
+Gx::~Gx() {
+    if (thread_.joinable()) {
+        { std::lock_guard<std::mutex> l(jobMutex_); quit_ = true; jobCv_.notify_all(); }
+        thread_.join();
+    }
+}
+
+void Gx::renderFrame() {
     struct Timer {                                                    // temps de dessin de l'image 3D (mesures)
         uint64_t& acc;
         std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
         ~Timer() { acc += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count()); }
     } timer{ renderNs };
 
-    const uint32_t clearAlpha = (clearColor >> 16) & 31;
+    const uint32_t clearAlpha = (rClearColor_ >> 16) & 31;
     // octet du haut = opacite 0..31 (0 : rien de dessine, le moteur 2D voit a travers)
     const uint32_t clearRgb = (clearAlpha == 0) ? 0u :
-        ((clearAlpha << 24) | (uint32_t(expand5(clearColor & 31)) << 16) | (uint32_t(expand5((clearColor >> 5) & 31)) << 8) |
-            expand5((clearColor >> 10) & 31));
+        ((clearAlpha << 24) | (uint32_t(expand5(rClearColor_ & 31)) << 16) | (uint32_t(expand5((rClearColor_ >> 5) & 31)) << 8) |
+            expand5((rClearColor_ >> 10) & 31));
     std::fill(color_.begin(), color_.end(), clearRgb);
-    std::fill(depth_.begin(), depth_.end(), float(clearDepth & 0x7FFF) / 32767.0f);
+    std::fill(depth_.begin(), depth_.end(), float(rClearDepth_ & 0x7FFF) / 32767.0f);
 
     polygonsDrawn = 0;
     polygonsSkipped = 0;
     texturedPolygons = 0;
     stats = Stats();
-    stats.offscreen = pendingRejected_;
-    stats.dropped = pendingDropped_;
-    stats.culled = pendingCulled_;
+    stats.offscreen = rRejected_;
+    stats.dropped = rDropped_;
+    stats.culled = rCulled_;
     std::fill(idBuf_.begin(), idBuf_.end(), uint16_t(0));
     std::fill(stencil_.begin(), stencil_.end(), uint8_t(0));
-    std::fill(polyId_.begin(), polyId_.end(), uint8_t((clearColor >> 24) & 63));   // ID de l'arriere-plan
-    std::fill(pixFlags_.begin(), pixFlags_.end(), uint8_t((clearColor & 0x8000) ? 2 : 0));   // l'arriere-plan peut avoir du brouillard
+    std::fill(polyId_.begin(), polyId_.end(), uint8_t((rClearColor_ >> 24) & 63));   // ID de l'arriere-plan
+    std::fill(pixFlags_.begin(), pixFlags_.end(), uint8_t((rClearColor_ & 0x8000) ? 2 : 0));   // l'arriere-plan peut avoir du brouillard
     std::fill(cov_.begin(), cov_.end(), uint8_t(31));
     lastWasMask_ = false;
     // Opaques d'abord, puis translucides dans l'ordre de soumission
     for (int pass = 0; pass < 2; pass++) {
-        for (size_t pi = 0; pi < pending_.size(); pi++) {
-            const GxPoly& poly = pending_[pi];
+        for (size_t pi = 0; pi < rList_.size(); pi++) {
+            const GxPoly& poly = rList_[pi];
             curId_ = uint16_t(pi + 1);
             const uint32_t alpha = (poly.attr >> 16) & 31;
             const bool translucent = alpha > 0 && alpha < 31;
@@ -579,11 +651,11 @@ void Gx::onVBlank(const GxTexMem& mem) {
     for (size_t i = 0; i < idBuf_.size(); i++) {                       // quels polygones sont visibles : negatif ou positif ?
         const uint16_t id = idBuf_[i];
         if (!id) continue;
-        const int8_t f = pending_[id - 1].facing;
+        const int8_t f = rList_[id - 1].facing;
         if (f < 0) stats.winNeg++; else if (f > 0) stats.winPos++;
     }
-    lastDrawn_.swap(pending_);                                         // gardee pour le diagnostic
-    pending_.clear();
+    lastDrawn_.swap(rList_);                                         // gardee pour le diagnostic
+    rList_.clear();
 }
 
 // Passe finale sur l'image 3D terminee :
@@ -593,7 +665,7 @@ void Gx::onVBlank(const GxTexMem& mem) {
 // - brouillard (bit 7) : la densite depend de la profondeur (table de 32 valeurs a partir de FOG_OFFSET, un pas
 //   de 0x400 >> FOG_SHIFT) ; la couleur et l'opacite tendent vers FOG_COLOR (bit 6 : l'opacite seulement).
 void Gx::edgeAndFog() {
-    if (disp3dcnt & 0x20) {
+    if (r3dcnt_ & 0x20) {
         std::vector<uint32_t> out(color_);
         for (int y = 0; y < 192; y++)
             for (int x = 0; x < 256; x++) {
@@ -615,16 +687,16 @@ void Gx::edgeAndFog() {
             }
         color_.swap(out);
     }
-    if (disp3dcnt & 0x80) {
-        const int shift = (disp3dcnt >> 8) & 15;
+    if (r3dcnt_ & 0x80) {
+        const int shift = (r3dcnt_ >> 8) & 15;
         const float step = float(0x400 >> shift);
         const float offset = float(reg16(0x2C) & 0x7FFF);
-        const uint32_t fc = uint32_t(dispRegs[0x28] | (dispRegs[0x29] << 8) | (dispRegs[0x2A] << 16));
+        const uint32_t fc = uint32_t(rRegs_[0x28] | (rRegs_[0x29] << 8) | (rRegs_[0x2A] << 16));
         const float fr = expand5(fc & 31), fg = expand5((fc >> 5) & 31), fb = expand5((fc >> 10) & 31);
         const float fa = float((fc >> 16) & 31);
-        const bool alphaOnly = (disp3dcnt & 0x40) != 0;
+        const bool alphaOnly = (r3dcnt_ & 0x40) != 0;
         float table[32];
-        for (int k = 0; k < 32; k++) { const int v = dispRegs[0x30 + k] & 127; table[k] = v == 127 ? 128.0f : float(v); }
+        for (int k = 0; k < 32; k++) { const int v = rRegs_[0x30 + k] & 127; table[k] = v == 127 ? 128.0f : float(v); }
         for (size_t i = 0; i < color_.size(); i++) {
             if (!(pixFlags_[i] & 2)) continue;
             const float t = (depth_[i] * 32767.0f - offset) / step - 1.0f;
@@ -643,7 +715,7 @@ void Gx::edgeAndFog() {
             color_[i] = (ia << 24) | (uint32_t(r + 0.5f) << 16) | (uint32_t(g + 0.5f) << 8) | uint32_t(b + 0.5f);
         }
     }
-    if (disp3dcnt & 0x10) {                                           // anticrenelage : bords melanges avec le dessous
+    if (r3dcnt_ & 0x10) {                                           // anticrenelage : bords melanges avec le dessous
         // Seuls les bords de la silhouette sont adoucis : un pixel dont un voisin est le fond ou un autre objet
         // (autre ID de polygone). Les jointures entre polygones d'un meme modele restent pleines.
         std::vector<uint8_t> sil(color_.size(), 0);
@@ -817,8 +889,8 @@ void Gx::prepareTexture(const GxPoly& poly, TexFast& tf) const {
 }
 
 void Gx::rasterize(const GxPoly& poly) {
-    const int vx1 = int(viewport_ & 0xFF), vy1 = int((viewport_ >> 8) & 0xFF);
-    const int vx2 = int((viewport_ >> 16) & 0xFF), vy2 = int((viewport_ >> 24) & 0xFF);
+    const int vx1 = int(rViewport_ & 0xFF), vy1 = int((rViewport_ >> 8) & 0xFF);
+    const int vx2 = int((rViewport_ >> 16) & 0xFF), vy2 = int((rViewport_ >> 24) & 0xFF);
     const float width = float(vx2 - vx1 + 1), height = float(vy2 - vy1 + 1);
     const float top = float(191 - vy2);
 
@@ -855,7 +927,7 @@ void Gx::rasterize(const GxPoly& poly) {
     const bool textured = shadowKind != 1 && ((poly.texParam >> 26) & 7) != 0;
     // Anticrenelage (DISP3DCNT bit 4) : les polygones opaques sont dessines un demi-pixel plus large, et chaque pixel
     // du bord retient la part couverte (distance au bord) ; la passe finale le melange avec ce qu'il recouvre.
-    const bool aaPoly = (disp3dcnt & 0x10) && shadowKind == 0 && polyAlpha == 31;
+    const bool aaPoly = (r3dcnt_ & 0x10) && shadowKind == 0 && polyAlpha == 31;
     TexFast& tf = texFast_;
     if (textured) prepareTexture(poly, tf);
     bool flat = true;                                                 // meme couleur a tous les sommets : pas d'interpolation
@@ -992,7 +1064,7 @@ void Gx::rasterize(const GxPoly& poly) {
                     const int ti = std::clamp(int(r) >> 3, 0, 31);
                     const uint16_t tc = reg16(0x50 + uint32_t(ti) * 2);
                     const float cr = expand5(tc & 31), cg = expand5((tc >> 5) & 31), cb = expand5((tc >> 10) & 31);
-                    if (disp3dcnt & 2) { hr = cr; hg = cg; hb = cb; }                     // surbrillance : ajoutee apres la texture
+                    if (r3dcnt_ & 2) { hr = cr; hg = cg; hb = cb; }                     // surbrillance : ajoutee apres la texture
                     else { r = cr; g = cg; bl = cb; }                                   // toon : remplace la couleur
                 }
                 int alpha = polyAlpha;
@@ -1045,8 +1117,8 @@ void Gx::rasterize(const GxPoly& poly) {
                     alpha = (polyAlpha == 31) ? ta : polyAlpha * ta / 31;
                     if (alpha == 0) continue;
                 }
-                if (mode == 2 && (disp3dcnt & 2)) { r += hr; g += hg; bl += hb; }
-                if ((disp3dcnt & 4) && alpha <= int(dispRegs[0x10] & 31)) continue;   // test alpha
+                if (mode == 2 && (r3dcnt_ & 2)) { r += hr; g += hg; bl += hb; }
+                if ((r3dcnt_ & 4) && alpha <= int(rRegs_[0x10] & 31)) continue;   // test alpha
                 const uint32_t ir = uint32_t(std::min(255.0f, r + 0.5f));
                 const uint32_t ig = uint32_t(std::min(255.0f, g + 0.5f));
                 const uint32_t ib = uint32_t(std::min(255.0f, bl + 0.5f));
